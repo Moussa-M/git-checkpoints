@@ -1,0 +1,302 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+VERSION="2.0.0"
+SCRIPT_NAME="git-checkpoints"
+
+# Colors
+RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; NC='\033[0m'
+
+_print(){ local c=$1 e=$2; shift 2; echo -e "${c}${e} $*${NC}"; }
+print_info()    { _print "$BLUE"  "ℹ️" "$@"; }
+print_success() { _print "$GREEN" "✅" "$@"; }
+print_warning() { _print "$YELLOW" "⚠️" "$@"; }
+print_error()   { _print "$RED"   "❌" "$@"; }
+
+check_git_repo(){ 
+  git rev-parse --git-dir &>/dev/null \
+    || { print_error "Not in a git repository"; exit 1; }
+}
+has_changes(){
+  git diff --cached --quiet &>/dev/null || return 0
+  git diff --quiet            &>/dev/null || return 0
+  [ -n "$(git ls-files --others --exclude-standard)" ] && return 0
+  return 1
+}
+sanitize(){ echo "$1" | sed 's/[^a-zA-Z0-9._-]/_/g'; }
+
+get_config(){
+  local key="$1" default="$2"
+  git config --local "checkpoints.$key" 2>/dev/null || echo "$default"
+}
+
+set_config(){
+  local key="$1" value="$2"
+  git config --local "checkpoints.$key" "$value"
+}
+
+create_checkpoint(){
+  check_git_repo
+  has_changes || { print_info "No changes to checkpoint"; return; }
+  local raw="$1" name tag
+  if [ -z "$raw" ]; then
+    name="auto_$(date +%Y_%m_%d_%H_%M_%S)"
+  else
+    name="$(sanitize "$raw")"
+  fi
+  tag="checkpoint/$name"
+  if git tag -l "$tag" | grep -qx "$tag"; then
+    print_error "Checkpoint '$name' exists"; exit 1
+  fi
+  git add -A
+  git commit --no-verify -m "SAVEPOINT - $name" &>/dev/null
+  git tag "$tag"
+  if git remote get-url origin &>/dev/null; then
+    if git push origin "$tag" &>/dev/null; then
+      print_success "Created & pushed $tag"
+    else
+      print_warning "Created locally: $tag (push failed)"
+    fi
+  else
+    print_success "Created $tag"
+  fi
+  git reset HEAD~1 --mixed &>/dev/null
+}
+
+list_checkpoints(){
+  check_git_repo
+  local tags=$(git tag -l 'checkpoint/*' | sort)
+  [ -z "$tags" ] && { print_info "No checkpoints"; return; }
+  echo "Available checkpoints:"
+  while read -r t; do
+    printf "  %s  (%s)\n" "$t" \
+      "$(git log -1 --format=%ai "$t")"
+  done <<<"$tags"
+}
+
+delete_one(){
+  local name="$1" tag="checkpoint/$name"
+  if ! git tag -l "$tag" | grep -qx "$tag"; then
+    print_error "No such checkpoint: $name"; exit 1
+  fi
+  git tag -d "$tag" &>/dev/null
+  if git remote get-url origin &>/dev/null; then
+    if git push origin ":refs/tags/$tag" &>/dev/null; then
+      print_success "Deleted $tag (remote & local)"
+    else
+      print_warning "Deleted $tag (local only)"
+    fi
+  else
+    print_success "Deleted $tag"
+  fi
+}
+
+delete_checkpoint(){
+  check_git_repo
+  local name="$1"
+  if [ "$name" = "*" ]; then
+    for t in $(git tag -l 'checkpoint/*'); do
+      delete_one "${t#checkpoint/}"
+    done
+  else
+    delete_one "$name"
+  fi
+}
+
+load_checkpoint(){
+  check_git_repo
+  local name="$1" tag="checkpoint/$name"
+  git tag -l "$tag" | grep -qx "$tag" \
+    || { print_error "No such checkpoint: $name"; exit 1; }
+  git reset --hard "$tag"  &>/dev/null
+  git reset HEAD~1 --mixed  &>/dev/null
+  print_success "Loaded $tag"
+}
+
+auto_checkpoint(){
+  check_git_repo
+  has_changes && { print_info "Auto-checkpointing…"; create_checkpoint ""; }
+}
+
+uninstall_local(){
+  check_git_repo
+  print_info "Removing repo aliases & cron…"
+  git config --local --unset alias.checkpoint 2>/dev/null || true
+  git config --local --unset alias.checkpoints 2>/dev/null || true
+  if command -v crontab &>/dev/null; then
+    local tmp=$(mktemp)
+    crontab -l 2>/dev/null | grep -v "$(pwd)" >"$tmp" || true
+    crontab "$tmp" && print_success "Removed cron job"
+    rm -f "$tmp"
+  fi
+}
+
+pause_cron(){
+  check_git_repo
+  command -v crontab &>/dev/null || { print_error "crontab not available"; exit 1; }
+  local tmp=$(mktemp)
+  if crontab -l 2>/dev/null | grep -q "$(pwd)" 2>/dev/null; then
+    crontab -l 2>/dev/null | grep -v "$(pwd)" >"$tmp" || true
+    crontab "$tmp"
+    set_config "paused" "true"
+    print_success "Paused auto-checkpointing for this repository"
+  else
+    local paused=$(get_config "paused" "false")
+    if [ "$paused" = "true" ]; then
+      print_info "Auto-checkpointing was already paused"
+    else
+      set_config "paused" "true"
+      print_success "Paused auto-checkpointing for this repository"
+    fi
+  fi
+  rm -f "$tmp"
+}
+
+resume_cron(){
+  check_git_repo
+  command -v crontab &>/dev/null || { print_error "crontab not available"; exit 1; }
+  local interval=$(get_config "interval" "5")
+  local tmp=$(mktemp)
+  if crontab -l 2>/dev/null | grep -q "$(pwd)" 2>/dev/null; then
+    print_info "Auto-checkpointing is already running"
+  else
+    crontab -l 2>/dev/null | grep -v "$(pwd)" >"$tmp" || true
+    echo "*/$interval * * * * cd \"$(pwd)\" && git-checkpoints auto >/dev/null 2>&1" >>"$tmp"
+    crontab "$tmp"
+    set_config "paused" "false"
+    print_success "Resumed auto-checkpointing for this repository (interval: ${interval}m)"
+  fi
+  rm -f "$tmp"
+}
+
+config_command(){
+  check_git_repo
+  local action="${1:-}" key="${2:-}" value="${3:-}"
+  
+  if [ -z "$action" ]; then
+    print_error "Usage: $SCRIPT_NAME config <get|set> [key] [value]"
+    exit 1
+  fi
+  
+  case "$action" in
+    get)
+      if [ -z "$key" ]; then
+        print_info "Current configuration:"
+        echo "  interval: $(get_config "interval" "5") minutes"
+        local paused=$(get_config "paused" "false")
+        if [ "$paused" = "true" ]; then
+          echo "  status: paused"
+        else
+          echo "  status: running"
+        fi
+      else
+        case "$key" in
+          interval)
+            echo "$(get_config "interval" "5")"
+            ;;
+          status)
+            local paused=$(get_config "paused" "false")
+            if [ "$paused" = "true" ]; then
+              echo "paused"
+            else
+              echo "running"
+            fi
+            ;;
+          *)
+            print_error "Unknown config key: $key"
+            exit 1
+            ;;
+        esac
+      fi
+      ;;
+    set)
+      if [ -z "$key" ] || [ -z "$value" ]; then
+        print_error "Usage: $SCRIPT_NAME config set <key> <value>"
+        exit 1
+      fi
+      case "$key" in
+        interval)
+          if ! [[ "$value" =~ ^[1-9][0-9]*$ ]]; then
+            print_error "Interval must be a positive integer (minutes)"
+            exit 1
+          fi
+          set_config "interval" "$value"
+          print_success "Set interval to $value minutes"
+          print_info "Run 'git-checkpoints resume' to apply the new interval"
+          ;;
+        *)
+          print_error "Unknown config key: $key"
+          exit 1
+          ;;
+      esac
+      ;;
+    *)
+      print_error "Usage: $SCRIPT_NAME config <get|set> [key] [value]"
+      exit 1
+      ;;
+  esac
+}
+
+uninstall_global(){
+  print_info "Removing global CLI & cron…"
+  for d in "$HOME/.local/bin" "$HOME/bin" "/usr/local/bin"; do
+    [ -f "$d/$SCRIPT_NAME" ] && rm -f "$d/$SCRIPT_NAME" \
+      && print_success "Removed $d/$SCRIPT_NAME"
+  done
+  if command -v crontab &>/dev/null; then
+    local tmp=$(mktemp)
+    crontab -l 2>/dev/null | grep -v "$SCRIPT_NAME" >"$tmp" || true
+    crontab "$tmp" && print_success "Removed all cron entries"
+    rm -f "$tmp"
+  fi
+}
+
+show_help(){
+  cat <<EOF
+$SCRIPT_NAME v$VERSION
+
+Usage:
+  $SCRIPT_NAME create [name]     Create a checkpoint
+  $SCRIPT_NAME list              List checkpoints
+  $SCRIPT_NAME delete <n|*>      Delete one or all
+  $SCRIPT_NAME load <name>       Restore a checkpoint
+  $SCRIPT_NAME auto              Run auto-checkpoint (cron)
+  $SCRIPT_NAME pause             Pause auto-checkpointing
+  $SCRIPT_NAME resume            Resume auto-checkpointing
+  $SCRIPT_NAME config <get|set>  Get/set configuration values
+  $SCRIPT_NAME local-uninstall   Remove aliases & cron here
+  $SCRIPT_NAME uninstall         Remove global CLI & cron
+  $SCRIPT_NAME help              Help
+  $SCRIPT_NAME version           Version
+
+Config options:
+  interval    Auto-checkpoint interval in minutes (default: 5)
+  status      Current status: paused or running
+
+Examples:
+  $SCRIPT_NAME config get           Show all configuration
+  $SCRIPT_NAME config get interval  Show current interval
+  $SCRIPT_NAME config get status    Show current status
+  $SCRIPT_NAME config set interval 10  Set interval to 10 minutes
+EOF
+}
+
+main(){
+  local cmd="${1:-list}"; shift||:
+  case "$cmd" in
+    create)          create_checkpoint "$@"   ;;
+    list)            list_checkpoints         ;;
+    delete)          delete_checkpoint "$1"   ;;
+    load)            load_checkpoint "$1"     ;;
+    auto)            auto_checkpoint          ;;
+    pause)           pause_cron               ;;
+    resume)          resume_cron              ;;
+    config)          config_command "$@"      ;;
+    local-uninstall) uninstall_local          ;;
+    uninstall)       uninstall_global         ;;
+    help)            show_help                ;;
+    version)         echo "$VERSION"          ;;
+    *)               print_error "Unknown: $cmd"; show_help; exit 1 ;;
+  esac
+}
+main "$@"
