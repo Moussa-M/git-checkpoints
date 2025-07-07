@@ -36,8 +36,16 @@ find_dir(){
 install_cli(){
   local dir dst
   dir="$(find_dir)"; dst="$dir/$CLI"
-  print_info "Downloading $CLI → $dst"
-  curl -fsSL "$RAW_BASE/$CLI" -o "$dst"
+  
+  # Use local file if available, otherwise download
+  if [ -f "./$CLI" ]; then
+    print_info "Installing local $CLI → $dst"
+    cp "./$CLI" "$dst"
+  else
+    print_info "Downloading $CLI → $dst"
+    curl -fsSL "$RAW_BASE/$CLI" -o "$dst"
+  fi
+  
   chmod +x "$dst"
   print_success "Installed $CLI"
   [[ ":$PATH:" == *":$dir:"* ]] \

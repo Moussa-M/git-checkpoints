@@ -1,0 +1,21 @@
+# Python files
+git_checkpoints/
+git_checkpoints.egg-info/
+setup.py
+*.pyc
+__pycache__/
+
+# Development files
+.git/
+.gitignore
+*.log
+node_modules/
+.DS_Store
+.vscode/
+
+# Include only essential files
+# git-checkpoints (bash script)
+# install.sh
+# package.json
+# README.md
+# LICENSE

@@ -5,15 +5,30 @@
 
 ---
 
-## 🚀 One-Line Install
+## 🚀 Installation
+
+### Option 1: NPM Package
+
+```bash
+npm install -g git-checkpoints
+```
+
+### Option 2: Python Package
+
+```bash
+pip install git-checkpoints
+```
+
+### Option 3: Bash Script (One-Line Install)
 
 ```bash
 curl -LsSf https://raw.githubusercontent.com/moussa-m/git-checkpoints/main/install.sh | bash
 ```
 
-* Installs `git-checkpoints` into your `PATH`
-* Adds `git checkpoint` / `git checkpoints` aliases in **this** repo
-* Schedules auto-snapshot every 5 minutes when changes exist (configurable)
+Both methods:
+* Install `git-checkpoints` into your `PATH`
+* Add `git checkpoint` / `git checkpoints` aliases in **this** repo
+* Schedule auto-snapshot every 5 minutes when changes exist (configurable)
 
 ---
 

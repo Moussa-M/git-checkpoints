@@ -169,6 +169,21 @@ resume_cron(){
   rm -f "$tmp"
 }
 
+status_cron(){
+  check_git_repo
+  local paused=$(get_config "paused" "false")
+  if [ "$paused" = "true" ]; then
+    print_info "Auto-checkpointing is paused"
+  else
+    if command -v crontab &>/dev/null && crontab -l 2>/dev/null | grep -q "$(pwd)" 2>/dev/null; then
+      local interval=$(get_config "interval" "5")
+      print_success "Auto-checkpointing is running (interval: ${interval}m)"
+    else
+      print_warning "Auto-checkpointing is configured as running but no cron job found"
+    fi
+  fi
+}
+
 config_command(){
   check_git_repo
   local action="${1:-}" key="${2:-}" value="${3:-}"
@@ -263,6 +278,7 @@ Usage:
   $SCRIPT_NAME auto              Run auto-checkpoint (cron)
   $SCRIPT_NAME pause             Pause auto-checkpointing
   $SCRIPT_NAME resume            Resume auto-checkpointing
+  $SCRIPT_NAME status            Show auto-checkpoint status
   $SCRIPT_NAME config <get|set>  Get/set configuration values
   $SCRIPT_NAME local-uninstall   Remove aliases & cron here
   $SCRIPT_NAME uninstall         Remove global CLI & cron
@@ -290,6 +306,7 @@ main(){
     load)            load_checkpoint "$1"     ;;
     auto)            auto_checkpoint          ;;
     pause)           pause_cron               ;;
+    status)          status_cron              ;;
     resume)          resume_cron              ;;
     config)          config_command "$@"      ;;
     local-uninstall) uninstall_local          ;;

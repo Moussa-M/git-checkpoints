@@ -1,0 +1,43 @@
+{
+  "name": "git-checkpoints",
+  "version": "2.0.0",
+  "description": "Zero-config, language-agnostic Git snapshots via tags",
+  "scripts": {
+    "postinstall": "bash ./install.sh"
+  },
+  "keywords": [
+    "git",
+    "checkpoints",
+    "snapshots",
+    "backup",
+    "version-control",
+    "cli"
+  ],
+  "author": {
+    "name": "Moussa Mokhtari",
+    "email": "me@moussamokhtari.com"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/moussa-m/git-checkpoints.git"
+  },
+  "bugs": {
+    "url": "https://github.com/moussa-m/git-checkpoints/issues"
+  },
+  "homepage": "https://github.com/moussa-m/git-checkpoints#readme",
+  "files": [
+    "git-checkpoints",
+    "install.sh",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=14.0.0"
+  },
+  "preferGlobal": true,
+  "os": [
+    "darwin",
+    "linux"
+  ]
+}
