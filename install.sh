@@ -54,17 +54,21 @@ install_cli(){
 
 setup_aliases(){
   print_info "Adding Git aliases in $(pwd)"
-  git config --local alias.checkpoint '!f(){ git-checkpoints create "$@"; }; f'
-  git config --local alias.checkpoints '!f(){
-    if [ $# -eq 0 ]; then git-checkpoints list;
-    else case $1 in
-      create) shift; git-checkpoints create "$@";;
-      list)   git-checkpoints list;;
-      delete) shift; git-checkpoints delete "$@";;
-      load)   shift; git-checkpoints load "$@";;
-      *)      echo "Usage: git checkpoints [create|list|delete|load]";;
+  
+  # Get full path to git-checkpoints command
+  local git_checkpoints_path=$(command -v git-checkpoints 2>/dev/null || echo "git-checkpoints")
+  
+  git config --local alias.checkpoint "!f(){ \"$git_checkpoints_path\" create \"\$@\"; }; f"
+  git config --local alias.checkpoints "!f(){
+    if [ \$# -eq 0 ]; then \"$git_checkpoints_path\" list;
+    else case \$1 in
+      create) shift; \"$git_checkpoints_path\" create \"\$@\";;
+      list)   \"$git_checkpoints_path\" list;;
+      delete) shift; \"$git_checkpoints_path\" delete \"\$@\";;
+      load)   shift; \"$git_checkpoints_path\" load \"\$@\";;
+      *)      echo \"Usage: git checkpoints [create|list|delete|load]\";;
     esac; fi
-  }; f'
+  }; f"
   print_success "Aliases set"
 }
 
@@ -73,10 +77,14 @@ setup_cron(){
   # Get configured interval or use default
   local interval=$(git config --local checkpoints.interval 2>/dev/null || echo "5")
   print_info "Re-installing cron entry every ${interval}m"
+  
+  # Get full path to git-checkpoints command
+  local git_checkpoints_path=$(command -v git-checkpoints 2>/dev/null || echo "git-checkpoints")
+  
   local tmp
   tmp="$(mktemp)"
   crontab -l 2>/dev/null | grep -v "$(pwd)" >"$tmp" || true
-  echo "*/$interval * * * * cd \"$(pwd)\" && git-checkpoints auto >/dev/null 2>&1" \
+  echo "*/$interval * * * * cd \"$(pwd)\" && \"$git_checkpoints_path\" auto >/dev/null 2>&1" \
     >>"$tmp"
   crontab "$tmp"; rm -f "$tmp"
   # Set status to running

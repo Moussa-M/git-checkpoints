@@ -58,6 +58,17 @@ send_notification(){
   # Detect OS and send notification
   if command -v notify-send &>/dev/null; then
     # Linux with notify-send
+    # Set up environment for cron jobs
+    if [ -z "$DISPLAY" ]; then
+      export DISPLAY=:0
+    fi
+    if [ -z "$DBUS_SESSION_BUS_ADDRESS" ]; then
+      # Try to find the user's D-Bus session
+      local dbus_addr=$(pgrep -u "$USER" dbus-daemon | head -1)
+      if [ -n "$dbus_addr" ]; then
+        export DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u)/bus"
+      fi
+    fi
     notify-send "$title" "$message" &>/dev/null || true
   elif command -v osascript &>/dev/null; then
     # macOS with AppleScript
@@ -76,6 +87,89 @@ get_config(){
 set_config(){
   local key="$1" value="$2"
   git config --local "checkpoints.$key" "$value"
+}
+
+parse_interval(){
+  local input="$1"
+  local value unit
+  
+  # Check if input has a unit suffix
+  if [[ "$input" =~ ^([0-9]+)([smhd])$ ]]; then
+    value="${BASH_REMATCH[1]}"
+    unit="${BASH_REMATCH[2]}"
+  elif [[ "$input" =~ ^([0-9]+)$ ]]; then
+    # No unit specified, default to minutes
+    value="$input"
+    unit="m"
+  else
+    return 1
+  fi
+  
+  # Validate value is positive
+  if ! [[ "$value" =~ ^[1-9][0-9]*$ ]]; then
+    return 1
+  fi
+  
+  # Convert to seconds for internal storage
+  case "$unit" in
+    s) echo "$value" ;;
+    m) echo "$((value * 60))" ;;
+    h) echo "$((value * 3600))" ;;
+    d) echo "$((value * 86400))" ;;
+    *) return 1 ;;
+  esac
+}
+
+format_interval(){
+  local seconds="$1"
+  
+  if [ "$seconds" -lt 60 ]; then
+    echo "${seconds}s"
+  elif [ "$seconds" -lt 3600 ]; then
+    if [ "$((seconds % 60))" -eq 0 ]; then
+      echo "$((seconds / 60))m"
+    else
+      echo "${seconds}s"
+    fi
+  elif [ "$seconds" -lt 86400 ]; then
+    if [ "$((seconds % 3600))" -eq 0 ]; then
+      echo "$((seconds / 3600))h"
+    else
+      echo "${seconds}s"
+    fi
+  else
+    if [ "$((seconds % 86400))" -eq 0 ]; then
+      echo "$((seconds / 86400))d"
+    else
+      echo "${seconds}s"
+    fi
+  fi
+}
+
+get_cron_schedule(){
+  local interval_seconds="$1"
+  
+  if [ "$interval_seconds" -lt 60 ]; then
+    # For intervals less than 1 minute, run every minute
+    echo "* * * * *"
+  elif [ "$interval_seconds" -lt 3600 ]; then
+    # For intervals in minutes
+    local minutes=$((interval_seconds / 60))
+    echo "*/$minutes * * * *"
+  elif [ "$interval_seconds" -lt 86400 ]; then
+    # For intervals in hours
+    local hours=$((interval_seconds / 3600))
+    echo "0 */$hours * * *"
+  else
+    # For intervals in days
+    local days=$((interval_seconds / 86400))
+    if [ "$days" -eq 1 ]; then
+      echo "0 0 * * *"
+    else
+      # For multi-day intervals, run daily and check inside the script
+      echo "0 0 * * *"
+    fi
+  fi
 }
 
 create_checkpoint(){
@@ -210,15 +304,19 @@ resume_cron(){
   command -v crontab &>/dev/null || { print_error "crontab not available"; exit 1; }
   local interval=$(get_config "interval" "5")
   local tmp=$(mktemp)
-  if crontab -l 2>/dev/null | grep -q "$(pwd)" 2>/dev/null; then
-    print_info "Auto-checkpointing is already running"
-  else
-    crontab -l 2>/dev/null | grep -v "$(pwd)" >"$tmp" || true
-    echo "*/$interval * * * * cd \"$(pwd)\" && git-checkpoints auto >/dev/null 2>&1" >>"$tmp"
-    crontab "$tmp"
-    set_config "paused" "false"
-    print_success "Resumed auto-checkpointing for this repository (interval: ${interval}m)"
-  fi
+  
+  # Get full path to git-checkpoints command
+  local git_checkpoints_path=$(command -v git-checkpoints 2>/dev/null || echo "git-checkpoints")
+  
+  # Always remove existing cron jobs for this repository first
+  crontab -l 2>/dev/null | grep -v "$(pwd)" >"$tmp" || true
+  
+  # Add new cron job with current interval using full path
+  echo "*/$interval * * * * cd \"$(pwd)\" && \"$git_checkpoints_path\" auto >/dev/null 2>&1" >>"$tmp"
+  crontab "$tmp"
+  set_config "paused" "false"
+  print_success "Resumed auto-checkpointing for this repository (interval: ${interval}m)"
+  
   rm -f "$tmp"
 }
 
@@ -294,7 +392,15 @@ config_command(){
           fi
           set_config "interval" "$value"
           print_success "Set interval to $value minutes"
-          print_info "Run 'git-checkpoints resume' to apply the new interval"
+          
+          # If auto-checkpointing is currently running, automatically update the cron job
+          local paused=$(get_config "paused" "false")
+          if [ "$paused" = "false" ] && command -v crontab &>/dev/null && crontab -l 2>/dev/null | grep -q "$(pwd)" 2>/dev/null; then
+            print_info "Updating cron job with new interval..."
+            resume_cron
+          else
+            print_info "Run 'git-checkpoints resume' to apply the new interval"
+          fi
           ;;
         notify)
           if [[ "$value" =~ ^(true|false)$ ]]; then
