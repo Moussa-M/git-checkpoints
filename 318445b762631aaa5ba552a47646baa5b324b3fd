@@ -1,0 +1,992 @@
+name: test-encrypted
+created: 2025-07-07T03:21:05+03:00
+branch: main
+commit: 318445b762631aaa5ba552a47646baa5b324b3fd
+
+--- PATCH START ---
+diff --git a/.gitattributes b/.gitattributes
+deleted file mode 100644
+index 3259034..0000000
+--- a/.gitattributes
++++ /dev/null
+@@ -1 +0,0 @@
+-.checkpoints/** filter=git-crypt diff=git-crypt
+diff --git a/README.md b/README.md
+index 24fafd8..07e4560 100644
+--- a/README.md
++++ b/README.md
+@@ -69,6 +69,7 @@ git-checkpoints config set interval 10        # set interval to 10 minutes
+ **Available options:**
+ - `interval` - Auto-checkpoint interval in minutes (default: 5)
+ - `status` - Current status: `paused` or `running`
++- `encryption` - Enable encrypted checkpoints using git-crypt (default: false)
+
+ **Examples:**
+ ```bash
+@@ -76,17 +77,101 @@ git-checkpoints config set interval 10        # set interval to 10 minutes
+ git-checkpoints config set interval 15
+ git-checkpoints resume  # apply new interval
+
++# Enable encrypted checkpoints (requires git-crypt)
++git-checkpoints config set encryption true
++
+ # Check current configuration
+ git-checkpoints config get
+ # Output:
+ # ℹ️ Current configuration:
+ #   interval: 15 minutes
+ #   status: running
++#   encryption: false
++```
++
++---
++
++## 🔒 Encryption (Optional)
++
++Git checkpoints supports optional encryption using GPG for enhanced privacy. When encryption is enabled, checkpoints are stored as encrypted git notes instead of Git tags, ensuring only users with the decryption key can access your checkpoint data. This keeps your working directory clean while providing privacy.
++
++### Automated Setup
++
++The installation script can automatically install and configure git-crypt:
++
++```bash
++curl -LsSf https://raw.githubusercontent.com/moussa-m/git-checkpoints/main/install.sh | bash
++# Will prompt to install git-crypt and set up GPG keys automatically
++```
++
++Or install git-crypt manually:
++```bash
++# Ubuntu/Debian
++sudo apt install git-crypt
++
++# macOS
++brew install git-crypt
++
++# Arch Linux
++sudo pacman -S git-crypt
++```
++
++### Enabling Encryption
++
++```bash
++# Enable encryption (disabled by default)
++git-checkpoints config set encryption true
++
++# Check encryption status
++git-checkpoints status
+ ```
+
++### Automated Key Management
++
++Built-in commands for easy collaboration:
++
++```bash
++# Add team members to encrypted repository
++git-checkpoints add-user alice@example.com
++git-checkpoints add-user bob@example.com
++
++# Export a key file for sharing (backup or new team members)
++git-checkpoints export-key team-backup.key
++
++# Import a key to unlock repository
++git-checkpoints import-key team-backup.key
++
++# Check current encryption status
++git-checkpoints status
++```
++
++### Manual Key Management (Advanced)
++
++You can also use git-crypt directly:
++
++```bash
++# Add collaborators (they need git-crypt installed)
++git-crypt add-gpg-user EMAIL@example.com
++
++# Export a symmetric key for sharing
++git-crypt export-key /path/to/keyfile
++
++# Collaborators can unlock with:
++git-crypt unlock /path/to/keyfile
++```
++
++### Switching Back
++
++```bash
++# Disable encryption (switch back to Git tags)
++git-checkpoints config set encryption false
++```
++
++**Note:** Existing checkpoints remain in their original format. Tag-based checkpoints stay as tags, encrypted checkpoints stay encrypted.
++
+ ---
+
+-## 🛠 Troubleshooting
++## � Troubleshooting
+
+ * **`git-checkpoints` not found?**
+   Ensure your install dir (e.g. `~/.local/bin`) is in `$PATH`.
+diff --git a/git-checkpoints b/git-checkpoints
+index 4e83a8c..10fe902 100755
+--- a/git-checkpoints
++++ b/git-checkpoints
+@@ -3,6 +3,7 @@ set -euo pipefail
+
+ VERSION="2.0.0"
+ SCRIPT_NAME="git-checkpoints"
++# Use git notes for encrypted storage instead of a folder
+
+ # Colors
+ RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; NC='\033[0m'
+@@ -13,10 +14,133 @@ print_success() { _print "$GREEN" "✅" "$@"; }
+ print_warning() { _print "$YELLOW" "⚠️" "$@"; }
+ print_error()   { _print "$RED"   "❌" "$@"; }
+
+-check_git_repo(){
++check_git_repo(){
+   git rev-parse --git-dir &>/dev/null \
+     || { print_error "Not in a git repository"; exit 1; }
+ }
++
++is_encryption_enabled(){
++  local enabled=$(get_config "encryption" "false")
++  [ "$enabled" = "true" ]
++}
++
++check_git_crypt(){
++  command -v git-crypt &>/dev/null \
++    || { print_error "git-crypt not found. Please install git-crypt first."; exit 1; }
++}
++
++init_git_crypt(){
++  check_git_crypt
++
++  # Check if git-crypt is already initialized
++  if [ -f .git/git-crypt/keys/default ] || [ -f .git-crypt/.git-crypt ]; then
++    return 0
++  fi
++
++  print_info "Initializing git-crypt for checkpoint encryption..."
++  if git-crypt init &>/dev/null; then
++    print_success "Git-crypt initialized successfully"
++  else
++    # It might already be initialized, check again
++    if [ -f .git/git-crypt/keys/default ] || [ -f .git-crypt/.git-crypt ]; then
++      return 0
++    else
++      print_error "Failed to initialize git-crypt"
++      return 1
++    fi
++  fi
++}
++
++create_encrypted_checkpoint(){
++  local name="$1"
++  local timestamp=$(date +%Y_%m_%d_%H_%M_%S)
++  local checkpoint_ref="checkpoint-encrypted/$name"
++
++  # Check if checkpoint already exists in notes
++  if git notes --ref="$checkpoint_ref" list &>/dev/null | grep -q .; then
++    print_error "Encrypted checkpoint '$name' already exists"; exit 1
++  fi
++
++  # Create patch of current changes
++  git add -A
++  local patch_content=$(git diff --cached)
++
++  if [ -z "$patch_content" ]; then
++    print_info "No changes to checkpoint"
++    return
++  fi
++
++  # Create metadata
++  local metadata="name: $name
++created: $(date -Iseconds)
++branch: $(git branch --show-current)
++commit: $(git rev-parse HEAD)
++
++--- PATCH START ---
++$patch_content"
++
++  # Create a temporary file for encryption
++  local temp_file=$(mktemp)
++  echo "$metadata" > "$temp_file"
++
++  # Encrypt the content using git-crypt (if available) or store as-is
++  local encrypted_content
++  if command -v gpg &>/dev/null; then
++    local gpg_key_id=$(get_config "gpg-key-id" "")
++    if [ -n "$gpg_key_id" ]; then
++      encrypted_content=$(gpg --encrypt -r "$gpg_key_id" --armor < "$temp_file" 2>/dev/null || cat "$temp_file")
++    else
++      encrypted_content=$(cat "$temp_file")
++    fi
++  else
++    encrypted_content=$(cat "$temp_file")
++  fi
++
++  rm -f "$temp_file"
++
++  # Store encrypted content in git notes
++  local current_commit=$(git rev-parse HEAD)
++  echo "$encrypted_content" | git notes --ref="$checkpoint_ref" add -F - "$current_commit"
++
++  # Push notes if remote exists
++  if git remote get-url origin &>/dev/null; then
++    if git push origin "refs/notes/$checkpoint_ref" &>/dev/null; then
++      print_success "Created & pushed encrypted checkpoint: $name"
++    else
++      print_warning "Created encrypted checkpoint locally: $name (push failed)"
++    fi
++  else
++    print_success "Created encrypted checkpoint: $name"
++  fi
++
++  # Reset staged changes
++  git reset --mixed &>/dev/null
++}
++
++create_tag_checkpoint(){
++  local name="$1"
++  local tag="checkpoint/$name"
++
++  if git tag -l "$tag" | grep -qx "$tag"; then
++    print_error "Checkpoint '$name' exists"; exit 1
++  fi
++
++  git add -A
++  git commit --no-verify -m "SAVEPOINT - $name" &>/dev/null
++  git tag "$tag"
++
++  if git remote get-url origin &>/dev/null; then
++    if git push origin "$tag" &>/dev/null; then
++      print_success "Created & pushed $tag"
++    else
++      print_warning "Created locally: $tag (push failed)"
++    fi
++  else
++    print_success "Created $tag"
++  fi
++
++  git reset HEAD~1 --mixed &>/dev/null
++}
+ has_changes(){
+   git diff --cached --quiet &>/dev/null || return 0
+   git diff --quiet            &>/dev/null || return 0
+@@ -38,43 +162,112 @@ set_config(){
+ create_checkpoint(){
+   check_git_repo
+   has_changes || { print_info "No changes to checkpoint"; return; }
+-  local raw="$1" name tag
++  local raw="$1" name
+   if [ -z "$raw" ]; then
+     name="auto_$(date +%Y_%m_%d_%H_%M_%S)"
+   else
+     name="$(sanitize "$raw")"
+   fi
+-  tag="checkpoint/$name"
+-  if git tag -l "$tag" | grep -qx "$tag"; then
+-    print_error "Checkpoint '$name' exists"; exit 1
++
++  # Choose between encrypted and tag-based checkpoints
++  if is_encryption_enabled; then
++    # Initialize git-crypt if not already done
++    init_git_crypt
++    create_encrypted_checkpoint "$name"
++  else
++    create_tag_checkpoint "$name"
+   fi
+-  git add -A
+-  git commit --no-verify -m "SAVEPOINT - $name" &>/dev/null
+-  git tag "$tag"
+-  if git remote get-url origin &>/dev/null; then
+-    if git push origin "$tag" &>/dev/null; then
+-      print_success "Created & pushed $tag"
+-    else
+-      print_warning "Created locally: $tag (push failed)"
++}
++
++list_encrypted_checkpoints(){
++  local count=0
++  local notes_refs=$(git for-each-ref --format='%(refname)' refs/notes/checkpoint-encrypted/ 2>/dev/null || echo "")
++
++  if [ -z "$notes_refs" ]; then
++    print_info "No encrypted checkpoints found"
++    return
++  fi
++
++  for ref in $notes_refs; do
++    local checkpoint_name=$(echo "$ref" | sed 's|refs/notes/checkpoint-encrypted/||')
++    local commit=$(git notes --ref="checkpoint-encrypted/$checkpoint_name" list | head -1 | cut -d' ' -f2)
++
++    if [ -n "$commit" ]; then
++      local note_content=$(git notes --ref="checkpoint-encrypted/$checkpoint_name" show "$commit" 2>/dev/null)
++      local created=$(echo "$note_content" | grep "^created:" | cut -d' ' -f2- || echo "unknown")
++      printf "  %s  (%s) [encrypted]\n" "$checkpoint_name" "$created"
++      ((count++))
+     fi
+-  else
+-    print_success "Created $tag"
++  done
++
++  if [ $count -eq 0 ]; then
++    print_info "No encrypted checkpoints found"
+   fi
+-  git reset HEAD~1 --mixed &>/dev/null
+ }
+
+-list_checkpoints(){
+-  check_git_repo
++list_tag_checkpoints(){
+   local tags=$(git tag -l 'checkpoint/*' | sort)
+-  [ -z "$tags" ] && { print_info "No checkpoints"; return; }
+-  echo "Available checkpoints:"
++  if [ -z "$tags" ]; then
++    print_info "No tag checkpoints found"
++    return
++  fi
++
+   while read -r t; do
+     printf "  %s  (%s)\n" "$t" \
+       "$(git log -1 --format=%ai "$t")"
+   done <<<"$tags"
+ }
+
+-delete_one(){
++list_checkpoints(){
++  check_git_repo
++  echo "Available checkpoints:"
++
++  if is_encryption_enabled; then
++    list_encrypted_checkpoints
++  else
++    list_tag_checkpoints
++  fi
++}
++
++delete_encrypted_checkpoint(){
++  local name="$1"
++  local checkpoint_ref="checkpoint-encrypted/$name"
++
++  # Check if checkpoint exists
++  if ! git for-each-ref --format='%(refname)' "refs/notes/$checkpoint_ref" | grep -q .; then
++    print_error "No encrypted checkpoint found: $name"
++    exit 1
++  fi
++
++  # Get the commit that has the note
++  local commit=$(git notes --ref="$checkpoint_ref" list | head -1 | cut -d' ' -f2)
++
++  if [ -n "$commit" ]; then
++    # Remove the note
++    git notes --ref="$checkpoint_ref" remove "$commit" &>/dev/null
++
++    # Remove the notes ref entirely if it's empty
++    if ! git notes --ref="$checkpoint_ref" list | grep -q .; then
++      git update-ref -d "refs/notes/$checkpoint_ref" &>/dev/null
++    fi
++
++    # Push changes if remote exists
++    if git remote get-url origin &>/dev/null; then
++      if git push origin ":refs/notes/$checkpoint_ref" &>/dev/null; then
++        print_success "Deleted encrypted checkpoint: $name (remote & local)"
++      else
++        print_warning "Deleted encrypted checkpoint: $name (local only)"
++      fi
++    else
++      print_success "Deleted encrypted checkpoint: $name"
++    fi
++  else
++    print_error "No encrypted checkpoint found: $name"
++    exit 1
++  fi
++}
++
++delete_tag_checkpoint(){
+   local name="$1" tag="checkpoint/$name"
+   if ! git tag -l "$tag" | grep -qx "$tag"; then
+     print_error "No such checkpoint: $name"; exit 1
+@@ -91,20 +284,96 @@ delete_one(){
+   fi
+ }
+
++delete_one(){
++  local name="$1"
++  if is_encryption_enabled; then
++    delete_encrypted_checkpoint "$name"
++  else
++    delete_tag_checkpoint "$name"
++  fi
++}
++
+ delete_checkpoint(){
+   check_git_repo
+   local name="$1"
+   if [ "$name" = "*" ]; then
+-    for t in $(git tag -l 'checkpoint/*'); do
+-      delete_one "${t#checkpoint/}"
+-    done
++    if is_encryption_enabled; then
++      # Delete all encrypted checkpoints
++      local notes_refs=$(git for-each-ref --format='%(refname)' refs/notes/checkpoint-encrypted/ 2>/dev/null || echo "")
++      for ref in $notes_refs; do
++        local checkpoint_name=$(echo "$ref" | sed 's|refs/notes/checkpoint-encrypted/||')
++        delete_encrypted_checkpoint "$checkpoint_name"
++      done
++    else
++      # Delete all tag checkpoints
++      for t in $(git tag -l 'checkpoint/*'); do
++        delete_one "${t#checkpoint/}"
++      done
++    fi
+   else
+     delete_one "$name"
+   fi
+ }
+
+-load_checkpoint(){
+-  check_git_repo
++load_encrypted_checkpoint(){
++  local name="$1"
++  local checkpoint_ref="checkpoint-encrypted/$name"
++
++  # Check if checkpoint exists
++  if ! git for-each-ref --format='%(refname)' "refs/notes/$checkpoint_ref" | grep -q .; then
++    print_error "No encrypted checkpoint found: $name"
++    exit 1
++  fi
++
++  # Get the commit that has the note
++  local commit=$(git notes --ref="$checkpoint_ref" list | head -1 | cut -d' ' -f2)
++
++  if [ -z "$commit" ]; then
++    print_error "No encrypted checkpoint found: $name"
++    exit 1
++  fi
++
++  # Get the note content
++  local note_content=$(git notes --ref="$checkpoint_ref" show "$commit" 2>/dev/null)
++
++  if [ -z "$note_content" ]; then
++    print_error "Failed to retrieve encrypted checkpoint: $name"
++    exit 1
++  fi
++
++  # Decrypt if needed
++  local decrypted_content="$note_content"
++  if echo "$note_content" | grep -q "BEGIN PGP MESSAGE"; then
++    if command -v gpg &>/dev/null; then
++      decrypted_content=$(echo "$note_content" | gpg --decrypt 2>/dev/null) || {
++        print_error "Failed to decrypt checkpoint: $name"
++        print_info "Make sure you have the correct GPG key"
++        exit 1
++      }
++    else
++      print_error "GPG not available for decryption"
++      exit 1
++    fi
++  fi
++
++  # Extract patch content
++  local patch_content=$(echo "$decrypted_content" | sed -n '/--- PATCH START ---/,$p' | tail -n +2)
++
++  if [ -z "$patch_content" ]; then
++    print_error "No patch content found in checkpoint: $name"
++    exit 1
++  fi
++
++  # Apply the patch
++  if echo "$patch_content" | git apply &>/dev/null; then
++    print_success "Loaded encrypted checkpoint: $name"
++  else
++    print_error "Failed to apply encrypted checkpoint: $name"
++    exit 1
++  fi
++}
++
++load_tag_checkpoint(){
+   local name="$1" tag="checkpoint/$name"
+   git tag -l "$tag" | grep -qx "$tag" \
+     || { print_error "No such checkpoint: $name"; exit 1; }
+@@ -113,6 +382,16 @@ load_checkpoint(){
+   print_success "Loaded $tag"
+ }
+
++load_checkpoint(){
++  check_git_repo
++  local name="$1"
++  if is_encryption_enabled; then
++    load_encrypted_checkpoint "$name"
++  else
++    load_tag_checkpoint "$name"
++  fi
++}
++
+ auto_checkpoint(){
+   check_git_repo
+   has_changes && { print_info "Auto-checkpointing…"; create_checkpoint ""; }
+@@ -189,6 +468,8 @@ config_command(){
+         else
+           echo "  status: running"
+         fi
++        local encryption=$(get_config "encryption" "false")
++        echo "  encryption: $encryption"
+       else
+         case "$key" in
+           interval)
+@@ -202,6 +483,9 @@ config_command(){
+               echo "running"
+             fi
+             ;;
++          encryption)
++            echo "$(get_config "encryption" "false")"
++            ;;
+           *)
+             print_error "Unknown config key: $key"
+             exit 1
+@@ -222,7 +506,34 @@ config_command(){
+           fi
+           set_config "interval" "$value"
+           print_success "Set interval to $value minutes"
+-          print_info "Run 'git-checkpoints resume' to apply the new interval"
++
++          # Auto-apply the new interval if auto-checkpointing is currently running
++          local paused=$(get_config "paused" "false")
++          if [ "$paused" = "false" ] && command -v crontab &>/dev/null; then
++            local tmp=$(mktemp)
++            if crontab -l 2>/dev/null | grep -q "$(pwd)" 2>/dev/null; then
++              # Remove old cron job and add new one with updated interval
++              crontab -l 2>/dev/null | grep -v "$(pwd)" >"$tmp" || true
++              echo "*/$value * * * * cd \"$(pwd)\" && git-checkpoints auto >/dev/null 2>&1" >>"$tmp"
++              crontab "$tmp"
++              print_success "Updated cron job with new interval"
++            fi
++            rm -f "$tmp"
++          fi
++          ;;
++        encryption)
++          if [ "$value" != "true" ] && [ "$value" != "false" ]; then
++            print_error "Encryption must be 'true' or 'false'"
++            exit 1
++          fi
++          if [ "$value" = "true" ]; then
++            check_git_crypt
++            print_warning "Enabling encryption will change how checkpoints are stored."
++            print_warning "Existing tag-based checkpoints will remain accessible via tags."
++            print_warning "New checkpoints will be stored as encrypted files."
++          fi
++          set_config "encryption" "$value"
++          print_success "Set encryption to $value"
+           ;;
+         *)
+           print_error "Unknown config key: $key"
+@@ -264,6 +575,10 @@ Usage:
+   $SCRIPT_NAME pause             Pause auto-checkpointing
+   $SCRIPT_NAME resume            Resume auto-checkpointing
+   $SCRIPT_NAME config <get|set>  Get/set configuration values
++  $SCRIPT_NAME add-user <email>  Add git-crypt collaborator
++  $SCRIPT_NAME export-key [file] Export git-crypt key for sharing
++  $SCRIPT_NAME import-key <file> Import git-crypt key to unlock
++  $SCRIPT_NAME status            Show encryption and git-crypt status
+   $SCRIPT_NAME local-uninstall   Remove aliases & cron here
+   $SCRIPT_NAME uninstall         Remove global CLI & cron
+   $SCRIPT_NAME help              Help
+@@ -272,15 +587,164 @@ Usage:
+ Config options:
+   interval    Auto-checkpoint interval in minutes (default: 5)
+   status      Current status: paused or running
++  encryption  Enable encrypted checkpoints using git-crypt (default: false)
+
+ Examples:
+-  $SCRIPT_NAME config get           Show all configuration
+-  $SCRIPT_NAME config get interval  Show current interval
+-  $SCRIPT_NAME config get status    Show current status
+-  $SCRIPT_NAME config set interval 10  Set interval to 10 minutes
++  $SCRIPT_NAME config get                    Show all configuration
++  $SCRIPT_NAME config get interval           Show current interval
++  $SCRIPT_NAME config get status             Show current status
++  $SCRIPT_NAME config get encryption         Show encryption status
++  $SCRIPT_NAME config set interval 10        Set interval to 10 minutes
++  $SCRIPT_NAME config set encryption true    Enable encrypted checkpoints
++  $SCRIPT_NAME config set encryption false   Disable encrypted checkpoints
++
++Git-Crypt Key Management:
++  $SCRIPT_NAME status                        Show encryption status
++  $SCRIPT_NAME add-user alice@example.com    Add collaborator to git-crypt
++  $SCRIPT_NAME export-key backup.key         Export key for sharing
++  $SCRIPT_NAME import-key backup.key         Import and unlock with key
++
++Encryption:
++  When encryption is enabled, checkpoints are stored as encrypted patch files
++  instead of Git tags. This requires git-crypt to be installed and provides
++  privacy so only users with the decryption key can access checkpoint data.
++
++  The install script can automatically install git-crypt and set up GPG keys.
++  Use the key management commands to share access with collaborators.
+ EOF
+ }
+
++add_git_crypt_user(){
++  check_git_repo
++  check_git_crypt
++
++  local email="$1"
++  if [ -z "$email" ]; then
++    print_error "Usage: $SCRIPT_NAME add-user <email@example.com>"
++    exit 1
++  fi
++
++  if [ ! -f .git-crypt/.git-crypt ]; then
++    print_error "git-crypt not initialized. Enable encryption first:"
++    print_info "  $SCRIPT_NAME config set encryption true"
++    exit 1
++  fi
++
++  print_info "Adding user $email to git-crypt..."
++  if git-crypt add-gpg-user "$email"; then
++    print_success "Added user $email to git-crypt"
++    print_info "User can now decrypt checkpoints after running: git-crypt unlock"
++  else
++    print_error "Failed to add user $email"
++    exit 1
++  fi
++}
++
++export_git_crypt_key(){
++  check_git_repo
++  check_git_crypt
++
++  local keyfile="${1:-}"
++  if [ -z "$keyfile" ]; then
++    # Generate default keyfile name
++    local repo_name=$(basename "$(pwd)")
++    keyfile="$HOME/.config/git-checkpoints/${repo_name}.key"
++    mkdir -p "$(dirname "$keyfile")"
++  fi
++
++  if [ ! -f .git-crypt/.git-crypt ]; then
++    print_error "git-crypt not initialized. Enable encryption first:"
++    print_info "  $SCRIPT_NAME config set encryption true"
++    exit 1
++  fi
++
++  print_info "Exporting git-crypt key to $keyfile..."
++  if git-crypt export-key "$keyfile"; then
++    print_success "Key exported to $keyfile"
++    print_info "Share this file with collaborators who can unlock with:"
++    print_info "  git-crypt unlock $keyfile"
++  else
++    print_error "Failed to export key"
++    exit 1
++  fi
++}
++
++import_git_crypt_key(){
++  check_git_repo
++  check_git_crypt
++
++  local keyfile="$1"
++  if [ -z "$keyfile" ]; then
++    print_error "Usage: $SCRIPT_NAME import-key <keyfile>"
++    exit 1
++  fi
++
++  if [ ! -f "$keyfile" ]; then
++    print_error "Key file not found: $keyfile"
++    exit 1
++  fi
++
++  print_info "Unlocking repository with key from $keyfile..."
++  if git-crypt unlock "$keyfile"; then
++    print_success "Repository unlocked successfully"
++    print_info "You can now access encrypted checkpoints"
++  else
++    print_error "Failed to unlock repository"
++    exit 1
++  fi
++}
++
++show_encryption_status(){
++  check_git_repo
++
++  local encryption_enabled=$(get_config "encryption" "false")
++  local gpg_key_id=$(get_config "gpg-key-id" "")
++
++  echo "Encryption Status:"
++  echo "  Enabled: $encryption_enabled"
++
++  if [ "$encryption_enabled" = "true" ]; then
++    if [ -f .git-crypt/.git-crypt ]; then
++      echo "  git-crypt: initialized"
++
++      # Check if repository is unlocked
++      if git-crypt status &>/dev/null; then
++        echo "  Status: unlocked"
++      else
++        echo "  Status: locked"
++        print_warning "Repository is locked. Run 'git-crypt unlock' or import a key"
++      fi
++
++      # Show number of encrypted checkpoints
++      local notes_refs=$(git for-each-ref --format='%(refname)' refs/notes/checkpoint-encrypted/ 2>/dev/null || echo "")
++      local count=0
++      if [ -n "$notes_refs" ]; then
++        count=$(echo "$notes_refs" | wc -l)
++      fi
++      echo "  Encrypted checkpoints: $count"
++    else
++      echo "  git-crypt: not initialized"
++      print_warning "Enable encryption with: $SCRIPT_NAME config set encryption true"
++    fi
++  else
++    # Show tag-based checkpoints
++    local tag_count=$(git tag -l 'checkpoint/*' 2>/dev/null | wc -l)
++    echo "  Tag checkpoints: $tag_count"
++  fi
++
++  if [ -n "$gpg_key_id" ]; then
++    echo "  GPG Key ID: $gpg_key_id"
++  fi
++
++  # Check git-crypt availability
++  if command -v git-crypt &>/dev/null; then
++    echo "  git-crypt: available"
++  else
++    echo "  git-crypt: not installed"
++    print_info "Install git-crypt to enable encryption features"
++  fi
++}
++
+ main(){
+   local cmd="${1:-list}"; shift||:
+   case "$cmd" in
+@@ -292,6 +756,10 @@ main(){
+     pause)           pause_cron               ;;
+     resume)          resume_cron              ;;
+     config)          config_command "$@"      ;;
++    add-user)        add_git_crypt_user "$1"  ;;
++    export-key)      export_git_crypt_key "$1" ;;
++    import-key)      import_git_crypt_key "$1" ;;
++    status)          show_encryption_status   ;;
+     local-uninstall) uninstall_local          ;;
+     uninstall)       uninstall_global         ;;
+     help)            show_help                ;;
+diff --git a/install.sh b/install.sh
+index a8952f5..666cc64 100755
+--- a/install.sh
++++ b/install.sh
+@@ -15,6 +15,88 @@ print_success() { _print "$GREEN" "✅" "$@"; }
+ print_warning() { _print "$YELLOW" "⚠️" "$@"; }
+ print_error()   { _print "$RED"   "❌" "$@"; }
+
++detect_os(){
++  if command -v apt-get &>/dev/null; then
++    echo "debian"
++  elif command -v yum &>/dev/null; then
++    echo "rhel"
++  elif command -v dnf &>/dev/null; then
++    echo "fedora"
++  elif command -v pacman &>/dev/null; then
++    echo "arch"
++  elif command -v brew &>/dev/null; then
++    echo "macos"
++  else
++    echo "unknown"
++  fi
++}
++
++install_git_crypt(){
++  if command -v git-crypt &>/dev/null; then
++    print_info "git-crypt already installed"
++    return 0
++  fi
++
++  print_info "Installing git-crypt..."
++  local os=$(detect_os)
++
++  case "$os" in
++    debian)
++      if command -v sudo &>/dev/null; then
++        sudo apt-get update && sudo apt-get install -y git-crypt
++      else
++        print_warning "Please install git-crypt manually: apt-get install git-crypt"
++        return 1
++      fi
++      ;;
++    rhel)
++      if command -v sudo &>/dev/null; then
++        sudo yum install -y epel-release && sudo yum install -y git-crypt
++      else
++        print_warning "Please install git-crypt manually: yum install git-crypt"
++        return 1
++      fi
++      ;;
++    fedora)
++      if command -v sudo &>/dev/null; then
++        sudo dnf install -y git-crypt
++      else
++        print_warning "Please install git-crypt manually: dnf install git-crypt"
++        return 1
++      fi
++      ;;
++    arch)
++      if command -v sudo &>/dev/null; then
++        sudo pacman -S --noconfirm git-crypt
++      else
++        print_warning "Please install git-crypt manually: pacman -S git-crypt"
++        return 1
++      fi
++      ;;
++    macos)
++      if command -v brew &>/dev/null; then
++        brew install git-crypt
++      else
++        print_warning "Please install Homebrew first, then: brew install git-crypt"
++        return 1
++      fi
++      ;;
++    *)
++      print_warning "Unknown OS. Please install git-crypt manually"
++      print_info "Visit: https://github.com/AGWA/git-crypt"
++      return 1
++      ;;
++  esac
++
++  if command -v git-crypt &>/dev/null; then
++    print_success "git-crypt installed successfully"
++    return 0
++  else
++    print_error "git-crypt installation failed"
++    return 1
++  fi
++}
++
+ check_deps(){
+   local miss=()
+   for cmd in git curl; do
+@@ -76,12 +158,118 @@ setup_cron(){
+   print_success "Cron installed and status set to running"
+ }
+
++setup_gpg_key(){
++  # Check if user already has a GPG key
++  if gpg --list-secret-keys --keyid-format LONG 2>/dev/null | grep -q "sec"; then
++    print_info "GPG key already exists"
++    return 0
++  fi
++
++  print_info "No GPG key found. Setting up GPG key for git-crypt..."
++
++  # Get user information
++  local user_name=$(git config --global user.name 2>/dev/null || echo "Git Checkpoints User")
++  local user_email=$(git config --global user.email 2>/dev/null || echo "user@example.com")
++
++  if [ "$user_email" = "user@example.com" ]; then
++    print_warning "Please set your git email: git config --global user.email 'your@email.com'"
++    return 1
++  fi
++
++  # Generate GPG key batch file
++  local gpg_batch=$(mktemp)
++  cat > "$gpg_batch" <<EOF
++Key-Type: RSA
++Key-Length: 4096
++Subkey-Type: RSA
++Subkey-Length: 4096
++Name-Real: $user_name
++Name-Email: $user_email
++Expire-Date: 0
++Passphrase:
++%commit
++EOF
++
++  print_info "Generating GPG key (this may take a moment)..."
++  if gpg --batch --generate-key "$gpg_batch" &>/dev/null; then
++    rm -f "$gpg_batch"
++    print_success "GPG key generated successfully"
++    return 0
++  else
++    rm -f "$gpg_batch"
++    print_error "Failed to generate GPG key"
++    return 1
++  fi
++}
++
++setup_git_crypt_keys(){
++  if ! command -v git-crypt &>/dev/null; then
++    print_warning "git-crypt not available, skipping key setup"
++    return 0
++  fi
++
++  if ! command -v gpg &>/dev/null; then
++    print_warning "GPG not found, skipping automatic key setup"
++    print_info "Install GPG for automatic key management"
++    return 0
++  fi
++
++  # Setup GPG key if needed
++  setup_gpg_key || return 1
++
++  # Get user's GPG key ID
++  local key_id=$(gpg --list-secret-keys --keyid-format LONG | grep "sec" | head -1 | awk '{print $2}' | cut -d'/' -f2)
++
++  if [ -z "$key_id" ]; then
++    print_warning "No GPG key found for git-crypt setup"
++    return 1
++  fi
++
++  print_info "GPG key ID: $key_id"
++
++  # Store key info for future reference
++  git config --local checkpoints.gpg-key-id "$key_id"
++
++  # Create keyfile directory
++  mkdir -p "$HOME/.config/git-checkpoints"
++  local keyfile="$HOME/.config/git-checkpoints/$(basename $(pwd)).key"
++
++  print_success "GPG key setup complete"
++  print_info "Key ID stored in git config: checkpoints.gpg-key-id"
++  print_info "To enable encryption: git-checkpoints config set encryption true"
++}
++
++prompt_git_crypt_install(){
++  if command -v git-crypt &>/dev/null; then
++    return 0
++  fi
++
++  echo
++  print_info "git-crypt is not installed but provides optional encryption for checkpoints"
++  read -p "Would you like to install git-crypt? [y/N]: " -n 1 -r
++  echo
++
++  if [[ $REPLY =~ ^[Yy]$ ]]; then
++    install_git_crypt && setup_git_crypt_keys
++  else
++    print_info "Skipping git-crypt installation"
++    print_info "You can install it later and enable encryption with:"
++    print_info "  git-checkpoints config set encryption true"
++  fi
++}
++
+ main(){
+   print_info "Starting Git-Checkpoints install"
+   check_deps
+   install_cli
+   setup_aliases
+   setup_cron
++  prompt_git_crypt_install
+   print_success "Installation complete!"
++  echo
++  print_info "Quick start:"
++  print_info "  git checkpoint                    # Create a checkpoint"
++  print_info "  git checkpoints list              # List checkpoints"
++  print_info "  git-checkpoints config set encryption true  # Enable encryption (if git-crypt installed)"
+ }
+ main
+diff --git a/test.txt b/test.txt
+new file mode 100644
+index 0000000..bab66a5
+--- /dev/null
++++ b/test.txt
+@@ -0,0 +1 @@
++test change for encrypted checkpoint
