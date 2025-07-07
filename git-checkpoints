@@ -23,7 +23,50 @@ has_changes(){
   [ -n "$(git ls-files --others --exclude-standard)" ] && return 0
   return 1
 }
+
+get_last_checkpoint(){
+  git tag -l 'checkpoint/*' | sort -V | tail -1
+}
+
+changes_differ_from_last_checkpoint(){
+  local last_checkpoint=$(get_last_checkpoint)
+  [ -z "$last_checkpoint" ] && return 0  # No previous checkpoint, changes are new
+  
+  # Create a temporary commit to compare against
+  local temp_commit=$(git stash create 2>/dev/null || echo "")
+  
+  # If no temp commit (no changes), return false
+  [ -z "$temp_commit" ] && return 1
+  
+  # Compare with last checkpoint
+  if git diff --quiet "$last_checkpoint" "$temp_commit" 2>/dev/null; then
+    return 1  # Changes are identical
+  else
+    return 0  # Changes are different
+  fi
+}
+
 sanitize(){ echo "$1" | sed 's/[^a-zA-Z0-9._-]/_/g'; }
+
+send_notification(){
+  local title="$1" message="$2"
+  local notify_enabled=$(get_config "notify" "false")
+  
+  # Skip if notifications are disabled
+  [ "$notify_enabled" = "false" ] && return
+  
+  # Detect OS and send notification
+  if command -v notify-send &>/dev/null; then
+    # Linux with notify-send
+    notify-send "$title" "$message" &>/dev/null || true
+  elif command -v osascript &>/dev/null; then
+    # macOS with AppleScript
+    osascript -e "display notification \"$message\" with title \"$title\"" &>/dev/null || true
+  elif command -v terminal-notifier &>/dev/null; then
+    # macOS with terminal-notifier (alternative)
+    terminal-notifier -title "$title" -message "$message" &>/dev/null || true
+  fi
+}
 
 get_config(){
   local key="$1" default="$2"
@@ -54,11 +97,14 @@ create_checkpoint(){
   if git remote get-url origin &>/dev/null; then
     if git push origin "$tag" &>/dev/null; then
       print_success "Created & pushed $tag"
+      send_notification "Git Checkpoint" "Created & pushed checkpoint: $name"
     else
       print_warning "Created locally: $tag (push failed)"
+      send_notification "Git Checkpoint" "Created checkpoint locally: $name (push failed)"
     fi
   else
     print_success "Created $tag"
+    send_notification "Git Checkpoint" "Created checkpoint: $name"
   fi
   git reset HEAD~1 --mixed &>/dev/null
 }
@@ -115,7 +161,14 @@ load_checkpoint(){
 
 auto_checkpoint(){
   check_git_repo
-  has_changes && { print_info "Auto-checkpointing…"; create_checkpoint ""; }
+  if has_changes; then
+    if changes_differ_from_last_checkpoint; then
+      print_info "Auto-checkpointing…"
+      create_checkpoint ""
+    else
+      print_info "No new changes since last checkpoint"
+    fi
+  fi
 }
 
 uninstall_local(){
@@ -198,6 +251,7 @@ config_command(){
       if [ -z "$key" ]; then
         print_info "Current configuration:"
         echo "  interval: $(get_config "interval" "5") minutes"
+        echo "  notify: $(get_config "notify" "false")"
         local paused=$(get_config "paused" "false")
         if [ "$paused" = "true" ]; then
           echo "  status: paused"
@@ -208,6 +262,9 @@ config_command(){
         case "$key" in
           interval)
             echo "$(get_config "interval" "5")"
+            ;;
+          notify)
+            echo "$(get_config "notify" "false")"
             ;;
           status)
             local paused=$(get_config "paused" "false")
@@ -238,6 +295,15 @@ config_command(){
           set_config "interval" "$value"
           print_success "Set interval to $value minutes"
           print_info "Run 'git-checkpoints resume' to apply the new interval"
+          ;;
+        notify)
+          if [[ "$value" =~ ^(true|false)$ ]]; then
+            set_config "notify" "$value"
+            print_success "Set notifications to $value"
+          else
+            print_error "Notify must be 'true' or 'false'"
+            exit 1
+          fi
           ;;
         *)
           print_error "Unknown config key: $key"
@@ -287,13 +353,17 @@ Usage:
 
 Config options:
   interval    Auto-checkpoint interval in minutes (default: 5)
+  notify      Enable desktop notifications (default: false)
   status      Current status: paused or running
 
 Examples:
   $SCRIPT_NAME config get           Show all configuration
   $SCRIPT_NAME config get interval  Show current interval
+  $SCRIPT_NAME config get notify    Show notification status
   $SCRIPT_NAME config get status    Show current status
-  $SCRIPT_NAME config set interval 10  Set interval to 10 minutes
+  $SCRIPT_NAME config set interval 10    Set interval to 10 minutes
+  $SCRIPT_NAME config set notify true    Enable notifications
+  $SCRIPT_NAME config set notify false   Disable notifications
 EOF
 }
 
