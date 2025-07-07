@@ -3,7 +3,6 @@
 
 import os
 import subprocess
-import sys
 from pathlib import Path
 from setuptools import setup, find_packages
 from setuptools.command.install import install
@@ -12,51 +11,58 @@ from setuptools.command.install import install
 with open("README.md", "r", encoding="utf-8") as fh:
     long_description = fh.read()
 
+
 class PostInstallCommand(install):
     """Post-installation command to run install.sh."""
-    
+
     def run(self):
         install.run(self)
-        
+
         # Look for install.sh in the source directory during development
         source_dir = Path(__file__).parent
         install_script = source_dir / "install.sh"
-        
+
         if install_script.exists():
             print("🚀 Running post-install setup...")
             try:
                 # Make sure install.sh is executable
                 os.chmod(install_script, 0o755)
-                
+
                 # Run install.sh from the source directory
-                result = subprocess.run([str(install_script)], 
-                                      cwd=str(source_dir),
-                                      check=False)
-                
+                result = subprocess.run(
+                    [str(install_script)], cwd=str(source_dir), check=False
+                )
+
                 if result.returncode == 0:
                     print("✅ Git-checkpoints setup completed successfully!")
                 else:
                     print("⚠️ Setup completed with warnings")
-                    
+
             except Exception as e:
                 print(f"⚠️ Post-install setup failed: {e}")
-                print("ℹ️ You can manually run 'git-checkpoints resume' to enable auto-checkpointing")
+                print(
+                    "ℹ️ You can manually run 'git-checkpoints resume' to enable auto-checkpointing"
+                )
         else:
             print("⚠️ install.sh not found - skipping post-install setup")
-            print("ℹ️ Run 'git-checkpoints resume' in your git repos to enable auto-checkpointing")
+            print(
+                "ℹ️ Run 'git-checkpoints resume' in your git repos to enable auto-checkpointing"
+            )
+
 
 setup(
     name="git-checkpoints",
-    version="2.0.0",
+    version="2.0.1",
     author="Moussa Mokhtari",
     author_email="me@moussamokhtari.com",
     description="Zero-config, language-agnostic Git snapshots via tags",
     long_description=long_description,
     long_description_content_type="text/markdown",
     url="https://github.com/moussa-m/git-checkpoints",
+    license="MIT",
     packages=find_packages(),
     data_files=[
-        ('', ['git-checkpoints', 'install.sh']),
+        ("", ["git-checkpoints", "install.sh"]),
     ],
     include_package_data=True,
     classifiers=[
@@ -64,7 +70,6 @@ setup(
         "Intended Audience :: Developers",
         "Topic :: Software Development :: Version Control",
         "Topic :: Software Development :: Version Control :: Git",
-        "License :: OSI Approved :: MIT License",
         "Programming Language :: Python :: 3",
         "Programming Language :: Python :: 3.6",
         "Programming Language :: Python :: 3.7",
@@ -84,7 +89,7 @@ setup(
         ],
     },
     cmdclass={
-        'install': PostInstallCommand,
+        "install": PostInstallCommand,
     },
     keywords="git version-control checkpoints snapshots tags backup",
     project_urls={

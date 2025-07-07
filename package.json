@@ -1,6 +1,6 @@
 {
   "name": "git-checkpoints",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "Zero-config, language-agnostic Git snapshots via tags",
   "scripts": {
     "postinstall": "bash ./install.sh"
