@@ -43,7 +43,7 @@ jobs:
         git config user.email "test@example.com"
 
         # Copy git-checkpoints to test directory
-        cp /github/workspace/git-checkpoints ./git-checkpoints
+        cp $GITHUB_WORKSPACE/git-checkpoints ./git-checkpoints
         chmod +x ./git-checkpoints
 
         # Test basic commands

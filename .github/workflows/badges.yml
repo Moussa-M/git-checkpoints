@@ -1,15 +1,13 @@
-name: Update Test Badges
+name: Update Documentation
 
 on:
   push:
     branches: [ main, master ]
-  workflow_run:
-    workflows: [ "Test Git Checkpoints" ]
-    types:
-    - completed
+  pull_request:
+    branches: [ main, master ]
 
 jobs:
-  update-badges:
+  update-docs:
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
 
@@ -17,22 +15,35 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
 
-    - name: Create test results badge
-      uses: schneegans/dynamic-badges-action@v1.7.0
-      with:
-        auth: ${{ secrets.GITHUB_TOKEN }}
-        gistID: ${{ secrets.BADGE_GIST_ID }}
-        filename: git-checkpoints-tests.json
-        label: Tests
-        message: ${{ github.event.workflow_run.conclusion == 'success' && 'Passing' || 'Unknown' }}
-        color: ${{ github.event.workflow_run.conclusion == 'success' && 'brightgreen' || 'lightgrey' }}
+    - name: Validate documentation
+      run: |
+        echo "✅ Validating documentation completeness..."
 
-    - name: Create coverage badge
-      uses: schneegans/dynamic-badges-action@v1.7.0
-      with:
-        auth: ${{ secrets.GITHUB_TOKEN }}
-        gistID: ${{ secrets.BADGE_GIST_ID }}
-        filename: git-checkpoints-coverage.json
-        label: Coverage
-        message: "Unit+Integration+Cron"
-        color: brightgreen
+        # Check for required documentation files
+        test -f README.md || (echo "❌ README.md missing" && exit 1)
+        test -f LICENSE || (echo "❌ LICENSE missing" && exit 1)
+        test -f tests/README.md || (echo "❌ tests/README.md missing" && exit 1)
+        test -f tests/TESTING.md || (echo "❌ tests/TESTING.md missing" && exit 1)
+
+        # Check that README has status badges
+        grep -q "github/actions/workflow/status" README.md || (echo "❌ Status badges missing from README" && exit 1)
+
+        # Check that help text is comprehensive
+        ./git-checkpoints help | grep -q "Usage:" || (echo "❌ Help text incomplete" && exit 1)
+        ./git-checkpoints version | grep -q "[0-9]" || (echo "❌ Version not set" && exit 1)
+
+        echo "✅ Documentation validation passed"
+
+    - name: Check workflow files
+      run: |
+        echo "✅ Validating GitHub Actions workflows..."
+
+        # Check that workflow files exist
+        test -f .github/workflows/test.yml || (echo "❌ test.yml workflow missing" && exit 1)
+        test -f .github/workflows/pr-check.yml || (echo "❌ pr-check.yml workflow missing" && exit 1)
+
+        # Validate YAML syntax
+        python3 -c "import yaml; yaml.safe_load(open('.github/workflows/test.yml'))" || (echo "❌ test.yml has invalid YAML" && exit 1)
+        python3 -c "import yaml; yaml.safe_load(open('.github/workflows/pr-check.yml'))" || (echo "❌ pr-check.yml has invalid YAML" && exit 1)
+
+        echo "✅ Workflow validation passed"
