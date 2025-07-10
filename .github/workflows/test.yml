@@ -41,7 +41,7 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
-        echo "$GITHUB_TOKEN" | gh auth login --with-token
+        # GitHub CLI is automatically authenticated in GitHub Actions
         gh auth status
 
     - name: Run Unit Tests
@@ -115,7 +115,7 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
-        echo "$GITHUB_TOKEN" | gh auth login --with-token
+        # GitHub CLI is automatically authenticated in GitHub Actions
         gh auth status
 
     - name: Run 10-Second Interval Tests
@@ -165,7 +165,7 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
-        echo "$GITHUB_TOKEN" | gh auth login --with-token
+        # GitHub CLI is automatically authenticated in GitHub Actions
         gh auth status
 
     - name: Test Installation Process
