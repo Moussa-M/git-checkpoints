@@ -52,7 +52,7 @@ class PostInstallCommand(install):
 
 setup(
     name="git-checkpoints",
-    version="2.0.2",
+    version="2.0.3",
     author="Moussa Mokhtari",
     author_email="me@moussamokhtari.com",
     description="Zero-config, language-agnostic Git snapshots via tags",
