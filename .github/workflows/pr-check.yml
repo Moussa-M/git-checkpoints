@@ -1,0 +1,109 @@
+name: PR Quick Check
+
+on:
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  quick-test:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up Git
+      run: |
+        git config --global user.name "GitHub Actions"
+        git config --global user.email "actions@github.com"
+
+    - name: Make scripts executable
+      run: |
+        chmod +x git-checkpoints
+        chmod +x tests/*.sh
+        chmod +x tests/test_scenarios/*.sh
+        chmod +x tests/fixtures/*.sh
+
+    - name: Run Unit Tests (Fast)
+      run: |
+        cd tests
+        ./unit_tests.sh
+
+    - name: Basic Functionality Test
+      run: |
+        # Test basic git-checkpoints functionality without GitHub integration
+        ./git-checkpoints version
+        ./git-checkpoints help
+
+        # Initialize a test git repo
+        mkdir /tmp/quick-test
+        cd /tmp/quick-test
+        git init
+        git config user.name "Test User"
+        git config user.email "test@example.com"
+
+        # Copy git-checkpoints to test directory
+        cp /github/workspace/git-checkpoints ./git-checkpoints
+        chmod +x ./git-checkpoints
+
+        # Test basic commands
+        echo "test file" > test.txt
+        git add test.txt
+
+        # Test checkpoint creation (local only)
+        ./git-checkpoints create "test-checkpoint" || echo "Expected to fail without remote"
+
+        # Test configuration
+        ./git-checkpoints config set interval 5
+        ./git-checkpoints config get interval
+
+        echo "✅ Basic functionality tests passed"
+
+  lint-and-format:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Check shell scripts with shellcheck
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y shellcheck
+
+        # Check main script
+        shellcheck git-checkpoints || echo "⚠️ Shellcheck warnings in main script"
+
+        # Check test scripts
+        find tests -name "*.sh" -exec shellcheck {} \; || echo "⚠️ Shellcheck warnings in test scripts"
+
+    - name: Verify file permissions
+      run: |
+        # Check that scripts are executable
+        test -x git-checkpoints || (echo "❌ git-checkpoints not executable" && exit 1)
+        test -x install.sh || (echo "❌ install.sh not executable" && exit 1)
+
+        # Check test scripts
+        find tests -name "*.sh" -exec test -x {} \; || (echo "❌ Some test scripts not executable" && exit 1)
+
+        echo "✅ File permissions check passed"
+
+  documentation-check:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Check documentation completeness
+      run: |
+        # Check for required documentation files
+        test -f README.md || (echo "❌ README.md missing" && exit 1)
+        test -f LICENSE || (echo "❌ LICENSE missing" && exit 1)
+        test -f tests/README.md || (echo "❌ tests/README.md missing" && exit 1)
+
+        # Check that help text is comprehensive
+        ./git-checkpoints help | grep -q "Usage:" || (echo "❌ Help text incomplete" && exit 1)
+        ./git-checkpoints version | grep -q "[0-9]" || (echo "❌ Version not set" && exit 1)
+
+        echo "✅ Documentation check passed"

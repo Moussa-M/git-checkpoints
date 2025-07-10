@@ -1,0 +1,184 @@
+name: Test Git Checkpoints
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        test-type: [ unit, integration, workflow, cron ]
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up Git
+      run: |
+        git config --global user.name "GitHub Actions"
+        git config --global user.email "actions@github.com"
+
+    - name: Make scripts executable
+      run: |
+        chmod +x git-checkpoints
+        chmod +x tests/*.sh
+        chmod +x tests/test_scenarios/*.sh
+        chmod +x tests/fixtures/*.sh
+
+    - name: Install GitHub CLI
+      run: |
+        curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+        echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+        sudo apt update
+        sudo apt install gh
+
+    - name: Authenticate GitHub CLI
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        echo "$GITHUB_TOKEN" | gh auth login --with-token
+        gh auth status
+
+    - name: Run Unit Tests
+      if: matrix.test-type == 'unit'
+      run: |
+        cd tests
+        ./unit_tests.sh
+
+    - name: Run Integration Tests
+      if: matrix.test-type == 'integration'
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        cd tests
+        SKIP_CLEANUP=0 ./integration_test.sh
+
+    - name: Run Workflow Tests
+      if: matrix.test-type == 'workflow'
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        cd tests
+        SKIP_CLEANUP=0 ./test_scenarios/basic_workflow_test.sh
+
+    - name: Run Cron Tests
+      if: matrix.test-type == 'cron'
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        cd tests
+        # Run standard cron tests
+        SKIP_CLEANUP=0 ./test_scenarios/cron_auto_checkpoint_test.sh
+
+    - name: Cleanup Test Artifacts
+      if: always()
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        cd tests
+        ./cleanup_all_tests.sh || true
+
+  test-seconds-interval:
+    runs-on: ubuntu-latest
+    # Run seconds test separately as it takes longer
+    if: github.event_name == 'push' || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'test-seconds'))
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up Git
+      run: |
+        git config --global user.name "GitHub Actions"
+        git config --global user.email "actions@github.com"
+
+    - name: Make scripts executable
+      run: |
+        chmod +x git-checkpoints
+        chmod +x tests/*.sh
+        chmod +x tests/test_scenarios/*.sh
+        chmod +x tests/fixtures/*.sh
+
+    - name: Install GitHub CLI
+      run: |
+        curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+        echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+        sudo apt update
+        sudo apt install gh
+
+    - name: Authenticate GitHub CLI
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        echo "$GITHUB_TOKEN" | gh auth login --with-token
+        gh auth status
+
+    - name: Run 10-Second Interval Tests
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        TEST_DURATION: 60
+      run: |
+        cd tests
+        SKIP_CLEANUP=0 ./test_scenarios/cron_seconds_test.sh
+
+    - name: Cleanup Test Artifacts
+      if: always()
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        cd tests
+        ./cleanup_all_tests.sh || true
+
+  test-installation:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up Git
+      run: |
+        git config --global user.name "GitHub Actions"
+        git config --global user.email "actions@github.com"
+
+    - name: Make scripts executable
+      run: |
+        chmod +x git-checkpoints
+        chmod +x tests/*.sh
+        chmod +x tests/test_scenarios/*.sh
+        chmod +x tests/fixtures/*.sh
+        chmod +x install.sh
+
+    - name: Install GitHub CLI
+      run: |
+        curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+        echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+        sudo apt update
+        sudo apt install gh
+
+    - name: Authenticate GitHub CLI
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        echo "$GITHUB_TOKEN" | gh auth login --with-token
+        gh auth status
+
+    - name: Test Installation Process
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        cd tests
+        SKIP_CLEANUP=0 ./install_and_test.sh --method local
+
+    - name: Cleanup Test Artifacts
+      if: always()
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        cd tests
+        ./cleanup_all_tests.sh || true

@@ -3,6 +3,11 @@
 
 🔄 **Zero-config, language-agnostic Git snapshots via tags.**
 
+[![Tests](https://img.shields.io/github/actions/workflow/status/Moussa-M/git-checkpoints/test.yml?branch=main&label=Tests)](https://github.com/Moussa-M/git-checkpoints/actions/workflows/test.yml)
+[![PR Check](https://img.shields.io/github/actions/workflow/status/Moussa-M/git-checkpoints/pr-check.yml?branch=main&label=PR%20Check)](https://github.com/Moussa-M/git-checkpoints/actions/workflows/pr-check.yml)
+[![License](https://img.shields.io/github/license/Moussa-M/git-checkpoints)](LICENSE)
+[![Version](https://img.shields.io/github/v/release/Moussa-M/git-checkpoints)](https://github.com/Moussa-M/git-checkpoints/releases)
+
 ---
 
 ## 🚀 Installation
@@ -98,6 +103,53 @@ git-checkpoints config get
 #   interval: 15 minutes
 #   status: running
 ```
+
+---
+
+## 🧪 Testing & Development
+
+This project includes a comprehensive test suite that runs automatically on GitHub Actions.
+
+### Running Tests Locally
+
+```bash
+# Run all tests
+cd tests
+./run_all_tests.sh
+
+# Run specific test categories
+./unit_tests.sh                                    # Unit tests
+./integration_test.sh                              # GitHub integration tests
+./test_scenarios/basic_workflow_test.sh            # Workflow tests
+./test_scenarios/cron_auto_checkpoint_test.sh      # Cron job tests
+./test_scenarios/cron_seconds_test.sh              # 10-second interval tests
+
+# Clean up test artifacts
+./cleanup_all_tests.sh
+```
+
+### Test Coverage
+
+- **Unit Tests**: Individual function testing
+- **Integration Tests**: Real GitHub repository creation and management
+- **Workflow Tests**: Typical development scenarios
+- **Cron Tests**: Automatic checkpoint functionality with various intervals
+- **Installation Tests**: Complete installation process verification
+
+### GitHub Actions
+
+The project uses GitHub Actions for continuous integration:
+
+- **Full Test Suite**: Runs on push to main branch
+- **PR Quick Check**: Fast tests for pull requests
+- **Seconds Interval Test**: Extended testing with 10-second intervals (triggered by `test-seconds` label)
+
+### Prerequisites for Local Testing
+
+- Git
+- GitHub CLI (`gh`) with authentication
+- Bash 4.0+
+- crontab (optional, for cron tests)
 
 ---
 

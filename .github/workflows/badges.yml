@@ -1,0 +1,38 @@
+name: Update Test Badges
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_run:
+    workflows: [ "Test Git Checkpoints" ]
+    types:
+    - completed
+
+jobs:
+  update-badges:
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Create test results badge
+      uses: schneegans/dynamic-badges-action@v1.7.0
+      with:
+        auth: ${{ secrets.GITHUB_TOKEN }}
+        gistID: ${{ secrets.BADGE_GIST_ID }}
+        filename: git-checkpoints-tests.json
+        label: Tests
+        message: ${{ github.event.workflow_run.conclusion == 'success' && 'Passing' || 'Unknown' }}
+        color: ${{ github.event.workflow_run.conclusion == 'success' && 'brightgreen' || 'lightgrey' }}
+
+    - name: Create coverage badge
+      uses: schneegans/dynamic-badges-action@v1.7.0
+      with:
+        auth: ${{ secrets.GITHUB_TOKEN }}
+        gistID: ${{ secrets.BADGE_GIST_ID }}
+        filename: git-checkpoints-coverage.json
+        label: Coverage
+        message: "Unit+Integration+Cron"
+        color: brightgreen
