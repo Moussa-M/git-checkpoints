@@ -138,6 +138,7 @@ create_checkpoint(){
       return
   fi
 
+
   # Tag the created commit object.
   git tag "$tag" "$stash_commit"
   print_success "Created local checkpoint: $tag"
