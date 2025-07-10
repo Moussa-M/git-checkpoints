@@ -3,10 +3,10 @@
 
 🔄 **Zero-config, language-agnostic Git snapshots via tags.**
 
-[![Tests](https://img.shields.io/github/actions/workflow/status/Moussa-M/git-checkpoints/test.yml?branch=main&label=Tests)](https://github.com/Moussa-M/git-checkpoints/actions/workflows/test.yml)
-[![PR Check](https://img.shields.io/github/actions/workflow/status/Moussa-M/git-checkpoints/pr-check.yml?branch=main&label=PR%20Check)](https://github.com/Moussa-M/git-checkpoints/actions/workflows/pr-check.yml)
-[![License](https://img.shields.io/github/license/Moussa-M/git-checkpoints)](LICENSE)
-[![Version](https://img.shields.io/github/v/release/Moussa-M/git-checkpoints)](https://github.com/Moussa-M/git-checkpoints/releases)
+[![Tests](https://img.shields.io/github/actions/workflow/status/Moussa-M/git-checkpoints-public/test.yml?branch=main&label=Tests)](https://github.com/Moussa-M/git-checkpoints-public/actions/workflows/test.yml)
+[![PR Check](https://img.shields.io/github/actions/workflow/status/Moussa-M/git-checkpoints-public/pr-check.yml?branch=main&label=PR%20Check)](https://github.com/Moussa-M/git-checkpoints-public/actions/workflows/pr-check.yml)
+[![License](https://img.shields.io/github/license/Moussa-M/git-checkpoints-public)](LICENSE)
+[![Version](https://img.shields.io/github/v/release/Moussa-M/git-checkpoints-public)](https://github.com/Moussa-M/git-checkpoints-public/releases)
 
 ---
 
