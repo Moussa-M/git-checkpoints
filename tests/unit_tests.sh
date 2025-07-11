@@ -97,12 +97,51 @@ test_checkpoint_creation() {
     create_test_files 2
     
     # Test with unstaged changes only
-    assert_success "./git-checkpoints create unstaged-test" "Should create checkpoint with unstaged changes"
+    # First, capture debug output to a file
+    local debug_file="/tmp/git-checkpoints-debug.log"
+    echo "=== Starting test with unstaged changes ===" > "$debug_file"
+    echo "Current directory: $(pwd)" >> "$debug_file"
+    echo "Git status:" >> "$debug_file"
+    git status >> "$debug_file" 2>&1
+    echo "\n=== Creating checkpoint ===" >> "$debug_file"
+    
+    # Run the create command and capture all output
+    local create_output
+    create_output=$(./git-checkpoints create unstaged-test 2>&1)
+    local create_status=$?
+    
+    # Save the output
+    echo "$create_output" >> "$debug_file"
+    echo "\n=== After create command ===" >> "$debug_file"
+    echo "Git status:" >> "$debug_file"
+    git status >> "$debug_file" 2>&1
+    echo "\nGit tags:" >> "$debug_file"
+    git tag -l >> "$debug_file" 2>&1
+    echo "\nGit refs:" >> "$debug_file"
+    git show-ref >> "$debug_file" 2>&1
+    
+    # Check if create was successful
+    if [ $create_status -ne 0 ]; then
+        test_error "Failed to create checkpoint. Debug output saved to $debug_file"
+        cat "$debug_file"
+        return 1
+    fi
     
     # Verify checkpoint was created
+    echo "\n=== Listing checkpoints ===" >> "$debug_file"
     local list_output
-    list_output=$(./git-checkpoints list)
-    assert_contains "$list_output" "unstaged-test" "Should list created checkpoint"
+    list_output=$(./git-checkpoints list 2>&1)
+    echo "$list_output" >> "$debug_file"
+    
+    # Check if the checkpoint is listed
+    if ! echo "$list_output" | grep -q "unstaged-test"; then
+        test_error "Checkpoint 'unstaged-test' not found in list. Debug output saved to $debug_file"
+        cat "$debug_file"
+        return 1
+    fi
+    
+    test_success "Checkpoint created and listed successfully. Debug output saved to $debug_file"
+    cat "$debug_file"
     
     # Test with staged changes
     git add test_file_1.txt
