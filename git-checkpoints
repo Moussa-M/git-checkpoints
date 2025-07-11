@@ -22,6 +22,7 @@ has_changes(){
   ! git diff --cached --quiet 2>/dev/null || \
   ! git diff --quiet 2>/dev/null || \
   [ -n "$(git ls-files --others --exclude-standard)" ]
+  return $?
 }
 
 get_last_checkpoint(){
@@ -122,25 +123,60 @@ create_checkpoint(){
   fi
 
   local tag="checkpoint/$name"
-  if git tag -l | grep -qxF "$tag"; then
+  if git rev-parse "$tag" >/dev/null 2>&1; then
     print_error "Checkpoint '$name' already exists."
     exit 1
   fi
 
   print_info "Creating checkpoint object from current changes..."
-  # Create a commit object representing all current changes without touching the working directory or index.
-  local stash_commit
-  stash_commit=$(git stash create "Checkpoint: $name")
+  
+  # Debug: Show current git status
+  echo "DEBUG: Current git status before staging:"
+  git status --short
+  
+  # Stage all changes (both staged and unstaged)
+  # First, add all tracked files that have been modified
+  git add -u .
+  # Then add all untracked files
+  git add .
+  
+  # Debug: Show staged changes
+  echo "DEBUG: Staged changes:"
+  git diff --cached --name-status
+  
+  # Create a commit object representing all current changes
+  local temp_commit
+  temp_commit=$(git write-tree)
+  
+  # Check if there are any changes to commit
+  if [ -z "$(git diff --cached --name-status)" ]; then
+    print_warning "No changes to save. Checkpoint not created."
+    git reset --mixed HEAD  # Unstage changes
+    return 1
+  fi
+  
+  # Create a commit with the current index
+  temp_commit=$(echo "Checkpoint: $name" | git commit-tree "$temp_commit" -p HEAD 2>/dev/null)
 
-  # If there were no changes to stash, git stash create returns nothing.
-  if [ -z "$stash_commit" ]; then
-      print_warning "No changes to save. Checkpoint not created."
-      return
+  if [ -z "$temp_commit" ]; then
+    print_warning "No changes to save. Checkpoint not created."
+    git reset --mixed HEAD  # Unstage changes
+    return 1
   fi
 
-
-  # Tag the created commit object.
-  git tag "$tag" "$stash_commit"
+  # Create the tag
+  git tag -f -a -m "Checkpoint: $name" "$tag" "$temp_commit"
+  
+  # Clean up by resetting the working directory
+  git reset --mixed HEAD
+  
+  # Debug output
+  echo "DEBUG: Created tag $tag pointing to $temp_commit"
+  echo "DEBUG: Current tags:"
+  git tag -l
+  echo "DEBUG: All refs:"
+  git show-ref
+  
   print_success "Created local checkpoint: $tag"
 
   # Push the tag to the remote if it exists
@@ -157,17 +193,58 @@ create_checkpoint(){
   fi
 
   print_info "Your working directory and staging area are unaffected. ✨"
+  return 0
 }
 
 list_checkpoints(){
   check_git_repo
+  
+  # Debug: Show all refs
+  echo "DEBUG: All refs in list_checkpoints:"
+  git show-ref
+  
+  # List all tags that start with checkpoint/
+  echo "DEBUG: Listing tags with 'git tag -l':"
+  git tag -l 'checkpoint/*' --sort=-creatordate
+  
   local tags
   tags=$(git tag -l 'checkpoint/*' --sort=-creatordate)
-  [ -z "$tags" ] && { print_info "No checkpoints found."; return; }
+  
+  # If no tags found, try alternative method to find checkpoint refs
+  if [ -z "$tags" ]; then
+    echo "DEBUG: No tags found with 'git tag -l', trying alternative method..."
+    # Look for any refs that might be checkpoints
+    tags=$(git for-each-ref --format='%(refname:short)' refs/tags/checkpoint/* 2>/dev/null)
+    echo "DEBUG: Found with for-each-ref: $tags"
+  fi
+  
+  if [ -z "$tags" ]; then
+    print_info "No checkpoints found."
+    return 0
+  fi
+  
   echo "Available checkpoints (most recent first):"
   while read -r t; do
-    printf "  ${GREEN}%s${NC}  (%s)\n" "${t#checkpoint/}" \
-      "$(git log -1 --format=%ar "$t")"
+    # Skip empty lines
+    [ -z "$t" ] && continue
+    
+    # Extract the checkpoint name (everything after 'checkpoint/')
+    local name="${t#checkpoint/}"
+    
+    # Debug info for each tag
+    echo "DEBUG: Processing tag: $t"
+    echo "DEBUG:   Name: $name"
+    
+    # Get the commit date or tag date
+    local date
+    if date=$(git log -1 --format=%ar "$t" 2>/dev/null); then
+      echo "DEBUG:   Date: $date"
+    else
+      date="unknown time"
+      echo "DEBUG:   Could not get date for tag $t"
+    fi
+    
+    printf "  ${GREEN}%s${NC}  (%s)\n" "$name" "$date"
   done <<<"$tags"
 }
 
@@ -186,6 +263,66 @@ delete_one(){
     else
       print_warning "Could not delete remote checkpoint. You may need to do it manually."
     fi
+  fi
+}
+
+cleanup_auto_checkpoints(){
+  local max_auto
+  max_auto=$(get_config "max_auto" "10")
+  local auto_age_days
+  auto_age_days=$(get_config "auto_age_days" "30")
+  local now
+  now=$(date +%s)
+
+  # Get all auto checkpoints, sorted oldest to newest by creation date
+  local autos
+  autos=$(git tag -l 'checkpoint/auto_*' --sort=creatordate)
+
+  [ -z "$autos" ] && return  # No autos to clean
+
+  local deleted_count=0
+
+  # Age-based cleanup
+  if [ "$auto_age_days" -gt 0 ]; then
+    while read -r t; do
+      local create_date
+      create_date=$(git log -1 --format=%ct "$t")
+      local age_days=$(((now - create_date) / 86400))
+      if [ "$age_days" -gt "$auto_age_days" ]; then
+        local name="${t#checkpoint/}"
+        print_info "Cleaning up old auto checkpoint: $name (age: ${age_days} days)"
+        delete_one "$name"
+        ((deleted_count++))
+      fi
+    done <<<"$autos"
+  fi
+
+  # Refresh autos after age cleanup
+  autos=$(git tag -l 'checkpoint/auto_*' --sort=creatordate)
+
+  # Max count cleanup (after age, to avoid double-deletes)
+  if [ "$max_auto" -gt 0 ]; then
+    local count
+    count=$(echo "$autos" | wc -l)
+    if [ "$count" -gt "$max_auto" ]; then
+      local to_delete=$((count - max_auto))
+      # Take the oldest N to delete (head -n)
+      local old_autos
+      old_autos=$(echo "$autos" | head -n "$to_delete")
+      while read -r t; do
+        local name="${t#checkpoint/}"
+        print_info "Cleaning up excess auto checkpoint: $name (exceeds max $max_auto)"
+        delete_one "$name"
+        ((deleted_count++))
+      done <<<"$old_autos"
+    fi
+  fi
+
+  # Optional notification if any were cleaned
+  local notify_enabled
+  notify_enabled=$(get_config "notify" "false")
+  if [ "$notify_enabled" = "true" ] && [ "$deleted_count" -gt 0 ]; then
+    send_notification "Git Checkpoint Cleanup" "Auto checkpoints cleaned up."
   fi
 }
 
@@ -256,6 +393,7 @@ auto_checkpoint(){
     if changes_differ_from_last_checkpoint; then
       print_info "Auto-checkpointing changes..."
       create_checkpoint "" # Pass empty name for auto-naming
+      cleanup_auto_checkpoints
     else
       print_info "No new changes to checkpoint."
     fi
@@ -378,6 +516,8 @@ config_command(){
         print_info "Current configuration for this repository:"
         echo "  interval: $(get_config "interval" "5") minutes"
         echo "  notify:   $(get_config "notify" "false")"
+        echo "  max_auto:       $(get_config "max_auto" "10") (0 to disable)"
+        echo "  auto_age_days:  $(get_config "auto_age_days" "30") (0 to disable)"
         status_cron
       else
         get_config "$key"
@@ -389,7 +529,7 @@ config_command(){
         exit 1
       fi
       case "$key" in
-        interval|notify)
+        interval|notify|max_auto|auto_age_days)
           set_config "$key" "$value"
           print_success "Set '$key' to '$value'."
           # If auto-checkpointing is currently running, automatically update the cron job
@@ -457,6 +597,7 @@ ${YELLOW}Configuration & Help:${NC}
   $SCRIPT_NAME uninstall         Remove the script and all cron jobs globally
   $SCRIPT_NAME help              Show this help message
   $SCRIPT_NAME version           Display script version
+  Config keys: interval (minutes), notify (true/false), max_auto (count, 0=off), auto_age_days (days, 0=off)
 
 EOF
 }

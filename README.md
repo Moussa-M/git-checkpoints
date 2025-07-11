@@ -1,4 +1,3 @@
-
 # Git Checkpoints
 
 🔄 **Zero-config, language-agnostic Git snapshots via tags.**
@@ -82,13 +81,16 @@ Control auto-checkpointing behavior with the config command:
 ```bash
 git-checkpoints config get                    # show all settings
 git-checkpoints config get interval           # show current interval
-git-checkpoints config get status             # show current status
 git-checkpoints config set interval 10        # set interval to 10 minutes
 ```
 
 **Available options:**
 - `interval` - Auto-checkpoint interval in minutes (default: 5)
-- `status` - Current status: `paused` or `running`
+- `notify` - Enable notifications for checkpoint actions (true/false, default: false)
+- `max_auto` - Maximum number of auto checkpoints to keep (default: 10, 0 to disable)
+- `auto_age_days` - Delete auto checkpoints older than this many days (default: 30, 0 to disable)
+
+Auto cleanup of old or excess auto checkpoints runs automatically after creating a new auto checkpoint, based on the `max_auto` and `auto_age_days` settings. Manual checkpoints are not affected.
 
 **Examples:**
 ```bash
@@ -96,12 +98,22 @@ git-checkpoints config set interval 10        # set interval to 10 minutes
 git-checkpoints config set interval 15
 git-checkpoints resume  # apply new interval
 
+# Enable notifications
+git-checkpoints config set notify true
+
+# Set max auto checkpoints to 5 and age limit to 14 days
+git-checkpoints config set max_auto 5
+git-checkpoints config set auto_age_days 14
+
 # Check current configuration
 git-checkpoints config get
 # Output:
-# ℹ️ Current configuration:
+# ℹ️ Current configuration for this repository:
 #   interval: 15 minutes
-#   status: running
+#   notify:   true
+#   max_auto:       5 (0 to disable)
+#   auto_age_days:  14 (0 to disable)
+# ✅ Auto-checkpointing is ACTIVE (interval: 15m).
 ```
 
 ---
